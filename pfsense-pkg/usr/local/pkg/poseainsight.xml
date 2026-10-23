@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE packagegui SYSTEM "../schema/packages.dtd">
+<packagegui>
+    <name>poseainsight</name>
+    <version>1.0.0</version>
+    <title>Status: PoseaInsight (Derin Ağ Analitiği &amp; Trafik İstihbaratı)</title>
+    <include_file>/usr/local/pkg/poseainsight.inc</include_file>
+    <menu>
+        <name>PoseaInsight</name>
+        <section>Status</section>
+        <configfile>poseainsight.xml</configfile>
+        <url>/poseainsight.php</url>
+    </menu>
+    <tabs>
+        <tab>
+            <text>Trafik İstihbaratı &amp; Analitik</text>
+            <url>/poseainsight.php</url>
+            <active/>
+        </tab>
+    </tabs>
+</packagegui>
