@@ -13,23 +13,42 @@ $savemsg = "";
 
 // Handle AJAX request for deep analytics
 if (isset($_GET['ajax_insight'])) {
-    header('Content-Type: application/json');
+    // Release PHP session immediately so other requests/tabs are never blocked
+    session_write_close();
+    header('Content-Type: application/json; charset=utf-8');
     
     if (empty($conf['enabled'])) {
-        echo json_encode(['enabled' => false, 'clients' => []]);
+        echo json_encode([
+            'enabled' => false,
+            'total_down_mbps' => 0.0,
+            'total_up_mbps' => 0.0,
+            'active_clients_count' => 0,
+            'cdn_stats' => [],
+            'clients' => []
+        ], JSON_UNESCAPED_UNICODE);
         exit;
     }
+
+    // Short-lived transient cache (2.5 seconds) to avoid redundant iftop calls
+    $cache_file = '/tmp/poseainsight_cache.json';
+    if (file_exists($cache_file) && (time() - filemtime($cache_file) < 3)) {
+        $cached_json = @file_get_contents($cache_file);
+        if ($cached_json) {
+            echo $cached_json;
+            exit;
+        }
+    }
     
-    // 1. AD Users
+    // 1. Active Directory Users Mapping
     $ad_users = [];
     $ad_file = '/var/etc/poseafilter/ad_users.json';
     if (file_exists($ad_file)) {
         $ad_users = @json_decode(file_get_contents($ad_file), true) ?: [];
     }
     
-    // 2. ARP Table
+    // 2. ARP Table Mapping
     $arp_map = [];
-    exec("arp -an 2>/dev/null", $arp_lines);
+    exec("/usr/sbin/arp -an 2>/dev/null", $arp_lines);
     foreach ($arp_lines as $l) {
         if (preg_match('/\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-f:]+)/i', $l, $m)) {
             $arp_map[$m[1]] = strtolower($m[2]);
@@ -50,7 +69,7 @@ if (isset($_GET['ajax_insight'])) {
                     if (!isset($dns_map[$c_ip])) {
                         $dns_map[$c_ip] = [];
                     }
-                    if (!in_array($c_dom, $dns_map[$c_ip])) {
+                    if (!in_array($c_dom, $dns_map[$c_ip]) && count($dns_map[$c_ip]) < 4) {
                         $dns_map[$c_ip][] = $c_dom;
                     }
                 }
@@ -58,8 +77,8 @@ if (isset($_GET['ajax_insight'])) {
         }
     }
     
-    // 4. Run iftop
-    $iftop_raw = shell_exec("iftop -t -s 2 -n -N -i vtnet1 2>/dev/null");
+    // 4. Run fast 1-second sample iftop on LAN interface (vtnet1)
+    $iftop_raw = shell_exec("/usr/local/sbin/iftop -t -s 1 -n -N -i vtnet1 2>/dev/null");
     $lines = explode("\n", (string)$iftop_raw);
     
     function pi_parse_rate($str) {
@@ -174,14 +193,17 @@ if (isset($_GET['ajax_insight'])) {
         ];
     }
     
-    echo json_encode([
+    $result_json = json_encode([
         'enabled' => true,
         'total_down_mbps' => round($total_down, 2),
         'total_up_mbps' => round($total_up, 2),
         'active_clients_count' => count($clients),
         'cdn_stats' => $cdn_counts,
         'clients' => array_slice($clients, 0, (int)($conf['top_limit'] ?? 25))
-    ]);
+    ], JSON_UNESCAPED_UNICODE);
+    
+    @file_put_contents($cache_file, $result_json);
+    echo $result_json;
     exit;
 }
 
@@ -221,7 +243,7 @@ if ($savemsg) {
 <div class="panel panel-default">
     <div class="panel-heading">
         <h2 class="panel-title">
-            <i class="fa-solid fa-brain"></i> PoseaInsight &bull; Derin Ağ Analitiği &amp; Canlı Trafik İstihbaratı
+            <i class="fa fa-tachometer"></i> PoseaInsight &bull; Derin Ağ Analitiği &amp; Canlı Trafik İstihbaratı
         </h2>
     </div>
     <div class="panel-body">
@@ -232,18 +254,18 @@ if ($savemsg) {
         <form method="post" class="form-horizontal">
             <input type="hidden" name="act" value="save_settings">
 
-            <div class="alert <?=!empty($conf['enabled']) ? 'alert-success' : 'alert-warning'?>" style="display:flex; align-items:center; justify-content:space-between;">
-                <div>
-                    <strong><i class="fa-solid fa-radar"></i> PoseaInsight Motor Durumu:</strong>
+            <div class="alert <?=!empty($conf['enabled']) ? 'alert-success' : 'alert-warning'?>" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:12px 18px; border-radius:6px;">
+                <div style="font-size:14px;">
+                    <strong><i class="fa fa-shield"></i> PoseaInsight Motor Durumu:</strong>
                     <?php if (!empty($conf['enabled'])): ?>
-                        <span class="badge" style="background-color:#16a34a; font-size:13px; margin-left:8px;">AKTİF (Trafik İstihbaratı Çalışıyor)</span>
+                        <span class="badge" style="background-color:#16a34a; font-size:13px; margin-left:8px; padding:6px 12px;">AKTİF (Trafik İstihbaratı Çalışıyor)</span>
                     <?php else: ?>
-                        <span class="badge" style="background-color:#64748b; font-size:13px; margin-left:8px;">PASİF (Analitik Devre Dışı)</span>
+                        <span class="badge" style="background-color:#64748b; font-size:13px; margin-left:8px; padding:6px 12px;">PASİF (Analitik Devre Dışı)</span>
                     <?php endif; ?>
                 </div>
                 <div class="checkbox" style="margin:0;">
-                    <label style="font-weight:bold; cursor:pointer;">
-                        <input type="checkbox" name="enabled" value="1" <?=!empty($conf['enabled']) ? 'checked' : ''?> onchange="this.form.submit();">
+                    <label style="font-weight:700; color:#0f172a; cursor:pointer; font-size:13px;">
+                        <input type="checkbox" name="enabled" value="1" <?=!empty($conf['enabled']) ? 'checked' : ''?> onchange="this.form.submit();" style="transform:scale(1.2); margin-right:8px;">
                         PoseaInsight Servisini Etkinleştir
                     </label>
                 </div>
@@ -273,7 +295,7 @@ if ($savemsg) {
                 </div>
             </div>
             <div class="text-right">
-                <button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-check"></i> Ayarları Güncelle</button>
+                <button type="submit" class="btn btn-primary btn-sm"><i class="fa fa-check"></i> Ayarları Güncelle</button>
             </div>
         </form>
 
@@ -281,7 +303,7 @@ if ($savemsg) {
 
         <?php if (empty($conf['enabled'])): ?>
             <div class="jumbotron text-center" style="background:#0f172a; color:#fff; border-radius:10px; margin-top:20px; padding:40px 20px;">
-                <div style="font-size:48px; color:#94a3b8; margin-bottom:15px;"><i class="fa-solid fa-eye-slash"></i></div>
+                <div style="font-size:48px; color:#94a3b8; margin-bottom:15px;"><i class="fa fa-eye-slash"></i></div>
                 <h3 style="color:#f8fafc;">PoseaInsight Şu Anda Pasif Durumda</h3>
                 <p class="text-muted" style="max-width:600px; margin:0 auto 20px auto;">
                     Canlı ağ trafiğini, cihaz parmak izlerini (Android/iPhone/Windows) ve anlık CDN tüketimlerini görüntülemek için lütfen yukarıdaki anahtarı etkinleştirin.
@@ -289,7 +311,7 @@ if ($savemsg) {
                 <form method="post">
                     <input type="hidden" name="act" value="save_settings">
                     <input type="hidden" name="enabled" value="1">
-                    <button type="submit" class="btn btn-success btn-lg"><i class="fa-solid fa-play"></i> PoseaInsight'ı Başlat</button>
+                    <button type="submit" class="btn btn-success btn-lg"><i class="fa fa-play"></i> PoseaInsight'ı Başlat</button>
                 </form>
             </div>
         <?php else: ?>
@@ -299,7 +321,7 @@ if ($savemsg) {
                     <div class="panel panel-default" style="background:#0f172a; border-left:4px solid #3b82f6; color:#fff;">
                         <div class="panel-body text-center">
                             <small class="text-muted">Toplam Anlık Download</small>
-                            <h2 style="margin:5px 0; color:#60a5fa;" id="statTotalDown"><i class="fa-solid fa-spinner fa-spin"></i></h2>
+                            <h2 style="margin:5px 0; color:#60a5fa;" id="statTotalDown"><i class="fa fa-spinner fa-spin"></i></h2>
                             <small class="text-muted">vtnet1 (LAN)</small>
                         </div>
                     </div>
@@ -308,7 +330,7 @@ if ($savemsg) {
                     <div class="panel panel-default" style="background:#0f172a; border-left:4px solid #10b981; color:#fff;">
                         <div class="panel-body text-center">
                             <small class="text-muted">Toplam Anlık Upload</small>
-                            <h2 style="margin:5px 0; color:#34d399;" id="statTotalUp"><i class="fa-solid fa-spinner fa-spin"></i></h2>
+                            <h2 style="margin:5px 0; color:#34d399;" id="statTotalUp"><i class="fa fa-spinner fa-spin"></i></h2>
                             <small class="text-muted">vtnet1 (LAN)</small>
                         </div>
                     </div>
@@ -317,7 +339,7 @@ if ($savemsg) {
                     <div class="panel panel-default" style="background:#0f172a; border-left:4px solid #f59e0b; color:#fff;">
                         <div class="panel-body text-center">
                             <small class="text-muted">Aktif Ağ İstemcileri</small>
-                            <h2 style="margin:5px 0; color:#fbbf24;" id="statActiveHosts"><i class="fa-solid fa-spinner fa-spin"></i></h2>
+                            <h2 style="margin:5px 0; color:#fbbf24;" id="statActiveHosts"><i class="fa fa-spinner fa-spin"></i></h2>
                             <small class="text-muted">İnternete Bağlı Cihaz</small>
                         </div>
                     </div>
@@ -325,7 +347,7 @@ if ($savemsg) {
                 <div class="col-md-3">
                     <div class="panel panel-default" style="background:#0f172a; border-left:4px solid #ef4444; color:#fff;">
                         <div class="panel-body text-center">
-                            <small class="text-muted">Hogger Alarmı (>15M)</small>
+                            <small class="text-muted">Hogger Alarmı (&gt;15M)</small>
                             <h2 style="margin:5px 0; color:#f87171;" id="statAlertCount">0</h2>
                             <small class="text-muted">Kritik Tüketen Cihaz</small>
                         </div>
@@ -336,13 +358,13 @@ if ($savemsg) {
             <!-- Deep Traffic Intelligence Table -->
             <div class="panel panel-primary" style="margin-top:20px;">
                 <div class="panel-heading" style="display:flex; justify-content:space-between; align-items:center;">
-                    <strong><i class="fa-solid fa-network-wired"></i> Canlı Cihaz &amp; Bağlantı İstihbaratı Tablosu</strong>
+                    <strong><i class="fa fa-exchange"></i> Canlı Cihaz &amp; Bağlantı İstihbaratı Tablosu</strong>
                     <div>
-                        <span id="piPulse" class="badge" style="background:#10b981;"><i class="fa-solid fa-bolt"></i> Canlı İzleme Açık</span>
-                        <button type="button" class="btn btn-xs btn-default" onclick="refreshInsightData();"><i class="fa-solid fa-rotate"></i> Şimdi Yenile</button>
+                        <span id="piPulse" class="badge" style="background:#10b981;"><i class="fa fa-bolt"></i> Canlı İzleme Açık</span>
+                        <button type="button" class="btn btn-xs btn-default" onclick="refreshInsightData();" style="margin-left:8px;"><i class="fa fa-refresh"></i> Şimdi Yenile</button>
                     </div>
                 </div>
-                <div class="panel-body">
+                <div class="panel-body" style="overflow-x:auto;">
                     <table class="table table-hover table-striped" id="piTable">
                         <thead>
                             <tr style="background:#090d16; color:#f8fafc;">
@@ -357,29 +379,47 @@ if ($savemsg) {
                             </tr>
                         </thead>
                         <tbody id="piTbody">
-                            <tr><td colspan="8" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin"></i> Canlı derin analitik toplanıyor...</td></tr>
+                            <tr><td colspan="8" class="text-center text-muted" style="padding:25px;"><i class="fa fa-spinner fa-spin"></i> Canlı derin analitik toplanıyor...</td></tr>
                         </tbody>
                     </table>
                 </div>
             </div>
 
             <script>
+            var isFetching = false;
             function refreshInsightData() {
+                if (isFetching) return;
+                isFetching = true;
+                
                 var tbody = document.getElementById('piTbody');
+                var pulse = document.getElementById('piPulse');
+                if (pulse) pulse.innerHTML = '<i class="fa fa-circle-o-notch fa-spin"></i> Taranıyor...';
+                
                 fetch('/poseainsight.php?ajax_insight=1')
                     .then(function(r) { return r.json(); })
                     .then(function(data) {
-                        if (!data.enabled) return;
+                        isFetching = false;
+                        if (pulse) pulse.innerHTML = '<i class="fa fa-bolt"></i> Canlı (' + new Date().toLocaleTimeString() + ')';
                         
-                        document.getElementById('statTotalDown').innerText = data.total_down_mbps.toFixed(2) + ' Mb';
-                        document.getElementById('statTotalUp').innerText = data.total_up_mbps.toFixed(2) + ' Mb';
-                        document.getElementById('statActiveHosts').innerText = data.active_clients_count;
+                        if (!data.enabled) {
+                            document.getElementById('statTotalDown').innerText = 'Pasif';
+                            document.getElementById('statTotalUp').innerText = 'Pasif';
+                            document.getElementById('statActiveHosts').innerText = '0';
+                            document.getElementById('statAlertCount').innerText = '0';
+                            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding:25px;"><i class="fa fa-pause-circle text-warning fa-2x" style="margin-bottom:8px;"></i><br><strong>PoseaInsight Analitik Motoru Pasif Durumda</strong><br><small>Canlı ağ trafiğini izlemek için yukarıdaki anahtarı etkinleştirin.</small></td></tr>';
+                            return;
+                        }
+                        
+                        document.getElementById('statTotalDown').innerText = (data.total_down_mbps || 0).toFixed(2) + ' Mb';
+                        document.getElementById('statTotalUp').innerText = (data.total_up_mbps || 0).toFixed(2) + ' Mb';
+                        document.getElementById('statActiveHosts').innerText = data.active_clients_count || 0;
                         
                         var alarms = 0;
                         tbody.innerHTML = '';
                         
                         if (!data.clients || data.clients.length === 0) {
-                            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">Şu anda aktif dış ağ bağlantısı yok.</td></tr>';
+                            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding:25px;"><i class="fa fa-info-circle text-info fa-2x" style="margin-bottom:8px;"></i><br><strong>Şu Anda Ağda Aktif Yoğun Bağlantı Yok</strong><br><small class="text-muted">İstemciler dış ağa paket gönderdikçe bu tablo canlı olarak güncellenir.</small></td></tr>';
+                            document.getElementById('statAlertCount').innerText = '0';
                             return;
                         }
                         
@@ -387,7 +427,7 @@ if ($savemsg) {
                             if (c.is_alarm) alarms++;
                             var tr = document.createElement('tr');
                             if (c.is_alarm) {
-                                tr.style.backgroundColor = 'rgba(239, 68, 68, 0.12)';
+                                tr.style.backgroundColor = 'rgba(239, 68, 68, 0.15)';
                             }
                             
                             var downColor = c.down_mbps >= 15 ? 'color:#ef4444; font-weight:bold;' : (c.down_mbps >= 5 ? 'color:#f59e0b; font-weight:bold;' : 'color:#10b981;');
@@ -398,15 +438,15 @@ if ($savemsg) {
                             tr.innerHTML = '<td><strong>' + c.ip + '</strong></td>' +
                                 '<td><strong>' + c.user + '</strong><br><small class="text-muted">' + c.dept + '</small></td>' +
                                 '<td><span class="label label-primary">' + c.os + '</span><br><small class="text-muted">' + c.vendor + ' (' + c.mac + ')</small></td>' +
-                                '<td style="' + downColor + '"><i class="fa-solid fa-arrow-down"></i> ' + c.down_mbps.toFixed(2) + ' Mbit/s</td>' +
-                                '<td><i class="fa-solid fa-arrow-up text-muted"></i> ' + c.up_mbps.toFixed(2) + ' Mbit/s</td>' +
-                                '<td><span class="label ' + c.cdn_badge + '"><i class="' + c.cdn_icon + '"></i> ' + c.cdn_name + '</span><br><small class="text-muted">' + c.remote_ip + '</small></td>' +
+                                '<td style="' + downColor + '"><i class="fa fa-arrow-down"></i> ' + c.down_mbps.toFixed(2) + ' Mbit/s</td>' +
+                                '<td><i class="fa fa-arrow-up text-muted"></i> ' + c.up_mbps.toFixed(2) + ' Mbit/s</td>' +
+                                '<td><span class="label ' + c.cdn_badge + '"><i class="' + c.cdn_icon + '"></i> ' + c.cdn_name + '</span><br><small class="text-muted">' + (c.remote_ip || '-') + '</small></td>' +
                                 '<td>' + (dnsBadges || '<span class="text-muted">-</span>') + '</td>' +
                                 '<td>' +
                                     '<form method="post" style="display:inline;" onsubmit="return confirm(\'' + c.ip + ' oturumunu sonlandırmak istediğinize emin misiniz?\');">' +
                                         '<input type="hidden" name="act" value="kill_host_states">' +
                                         '<input type="hidden" name="kill_ip" value="' + c.ip + '">' +
-                                        '<button type="submit" class="btn btn-xs btn-danger" title="Oturumu Kes"><i class="fa-solid fa-scissors"></i> Kes</button>' +
+                                        '<button type="submit" class="btn btn-xs btn-danger" title="Oturumu Kes"><i class="fa fa-cut"></i> Kes</button>' +
                                     '</form>' +
                                 '</td>';
                             tbody.appendChild(tr);
@@ -415,10 +455,12 @@ if ($savemsg) {
                         document.getElementById('statAlertCount').innerText = alarms;
                     })
                     .catch(function(err) {
-                        tbody.innerHTML = '<tr><td colspan="8" class="text-danger text-center">Hata: ' + err + '</td></tr>';
+                        isFetching = false;
+                        if (pulse) pulse.innerHTML = '<i class="fa fa-exclamation-triangle text-danger"></i> Hata';
+                        tbody.innerHTML = '<tr><td colspan="8" class="text-danger text-center" style="padding:20px;">Analitik verisi alınamadı: ' + err + '</td></tr>';
                     });
             }
-            setInterval(refreshInsightData, 6000);
+            setInterval(refreshInsightData, 5000);
             refreshInsightData();
             </script>
         <?php endif; ?>
