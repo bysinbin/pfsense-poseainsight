@@ -385,7 +385,19 @@ if ($savemsg) {
                 </div>
             </div>
 
+            
+            <form method="post" id="killStateForm" style="display:none;">
+                <input type="hidden" name="act" value="kill_host_states">
+                <input type="hidden" name="kill_ip" id="killStateIp" value="">
+            </form>
+
             <script>
+            function killHostState(ip) {
+                if (!confirm(ip + ' oturumunu sonlandırmak istediğinize emin misiniz?')) return;
+                document.getElementById('killStateIp').value = ip;
+                document.getElementById('killStateForm').submit();
+            }
+            
             var isFetching = false;
             function refreshInsightData() {
                 if (isFetching) return;
@@ -442,12 +454,8 @@ if ($savemsg) {
                                 '<td><i class="fa fa-arrow-up text-muted"></i> ' + c.up_mbps.toFixed(2) + ' Mbit/s</td>' +
                                 '<td><span class="label ' + c.cdn_badge + '"><i class="' + c.cdn_icon + '"></i> ' + c.cdn_name + '</span><br><small class="text-muted">' + (c.remote_ip || '-') + '</small></td>' +
                                 '<td>' + (dnsBadges || '<span class="text-muted">-</span>') + '</td>' +
-                                '<td>' +
-                                    '<form method="post" style="display:inline;" onsubmit="return confirm(\'' + c.ip + ' oturumunu sonlandırmak istediğinize emin misiniz?\');">' +
-                                        '<input type="hidden" name="act" value="kill_host_states">' +
-                                        '<input type="hidden" name="kill_ip" value="' + c.ip + '">' +
-                                        '<button type="submit" class="btn btn-xs btn-danger" title="Oturumu Kes"><i class="fa fa-cut"></i> Kes</button>' +
-                                    '</form>' +
+                                                                '<td>' +
+                                    '<button type="button" class="btn btn-xs btn-danger" onclick="killHostState(\'' + c.ip + '\')" title="Oturumu Kes"><i class="fa fa-cut"></i> Kes</button>' +
                                 '</td>';
                             tbody.appendChild(tr);
                         });
